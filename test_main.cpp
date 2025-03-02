@@ -27,7 +27,17 @@ TEST_CASE("Test function", "[test]") {
     task.step();
     REQUIRE(state == 3);
 
-    auto task2 = coro();
+    auto v = task.get();
+    REQUIRE(v == 2);
+}
 
-    auto t = func(task, task2);
+TEST_CASE("Exceptions", "[test]") {
+    auto throws = [&] -> Task<int> {
+        throw std::exception();
+        co_return 5;
+    };
+
+    auto task3 = throws();
+    task3.step();
+    REQUIRE_THROWS(task3.get());
 }

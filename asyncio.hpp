@@ -66,11 +66,21 @@ struct Task {
         auto final_suspend() noexcept { return std::suspend_always{}; }
 
         void unhandled_exception() noexcept {
-            /* TODO */
+            result = std::current_exception();
         }
 
         //void return_void() noexcept {}
-        void return_value(int) { /* TODO */ }
+        void return_value(T&& value) {
+            result = std::forward<T>(value);
+        }
+
+        std::variant<std::monostate, T, std::exception_ptr> result{};
+
+        T&& getResult() {
+            if (result.index() == 2)
+                std::rethrow_exception(std::get<2>(result));
+            return std::move(std::get<1>(result));
+        }
     };
 
     auto operator co_await() {
@@ -105,7 +115,7 @@ struct Task {
         if constexpr (std::is_void_v<T>) {
             return std::monostate{};
         } else {
-            return 5;
+            return handle.promise().getResult();
         }
     }
 
