@@ -55,34 +55,63 @@ private:
     std::coroutine_handle<promise_type> handle_{};
 };
 
+template <class T>
+struct Task;
+
+template <class T>
+struct Promise {
+    friend struct Task<T>;
+    Task<T> get_return_object() noexcept {
+        return Task{std::coroutine_handle<Promise>::from_promise(*this)};
+    }
+
+    auto initial_suspend() noexcept { return std::suspend_always{}; }
+    auto final_suspend() noexcept { return std::suspend_always{}; }
+
+    void unhandled_exception() noexcept {
+        result = std::current_exception();
+    }
+
+    //void return_void() noexcept {}
+    void return_value(T&& value) {
+        result = std::forward<T>(value);
+    }
+
+    std::variant<std::monostate, T, std::exception_ptr> result{};
+
+    T&& getResult() {
+        if (result.index() == 2)
+            std::rethrow_exception(std::get<2>(result));
+        return std::move(std::get<1>(result));
+    }
+};
+
+template <>
+struct Promise<void> {
+    friend struct Task<void>;
+    Task<void> get_return_object() noexcept;
+
+    auto initial_suspend() noexcept { return std::suspend_always{}; }
+    auto final_suspend() noexcept { return std::suspend_always{}; }
+
+    void unhandled_exception() noexcept {
+        result = std::current_exception();
+    }
+
+    void return_void() noexcept {}
+
+    std::variant<std::monostate, std::exception_ptr> result{};
+
+    void getResult() {
+        if (result.index() == 1)
+            std::rethrow_exception(std::get<1>(result));
+    }
+};
+
+
 template<class T>
 struct Task {
-    struct promise_type {
-        Task get_return_object() noexcept {
-            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
-        }
-
-        auto initial_suspend() noexcept { return std::suspend_always{}; }
-        auto final_suspend() noexcept { return std::suspend_always{}; }
-
-        void unhandled_exception() noexcept {
-            result = std::current_exception();
-        }
-
-        //void return_void() noexcept {}
-        void return_value(T&& value) {
-            result = std::forward<T>(value);
-        }
-
-        std::variant<std::monostate, T, std::exception_ptr> result{};
-
-        T&& getResult() {
-            if (result.index() == 2)
-                std::rethrow_exception(std::get<2>(result));
-            return std::move(std::get<1>(result));
-        }
-    };
-
+    using promise_type = Promise<T>;
     auto operator co_await() {
         struct Awaiter {
             [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -121,6 +150,10 @@ struct Task {
 
     owning_handle<promise_type> handle;
 };
+
+inline Task<void> Promise<void>::get_return_object() noexcept {
+    return Task<void>{std::coroutine_handle<Promise>::from_promise(*this)};
+}
 
 template<typename... Ts>
 auto func(Task<Ts> &... tasks) -> std::tuple<Ts...> {

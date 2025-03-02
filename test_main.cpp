@@ -41,3 +41,12 @@ TEST_CASE("Exceptions", "[test]") {
     task3.step();
     REQUIRE_THROWS(task3.get());
 }
+
+TEST_CASE("Void", "[test]") {
+    auto voidreturn = [&] -> Task<void> {;
+        co_return;
+    };
+
+    auto task3 = voidreturn();
+    task3.step();
+}
