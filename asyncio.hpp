@@ -65,8 +65,45 @@ struct Promise {
         return Task{std::coroutine_handle<Promise>::from_promise(*this)};
     }
 
-    auto initial_suspend() noexcept { return std::suspend_always{}; }
-    auto final_suspend() noexcept { return std::suspend_always{}; }
+    struct initial_awaiter {
+        bool await_ready() noexcept {
+            return false;
+        }
+
+        void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+            std::cout << "Init await suspend\n";
+        }
+
+        void await_resume() noexcept {
+            std::cout << "Init await resume\n";
+        }
+    };
+
+    struct final_awaiter {
+        bool await_ready() noexcept {
+            return false;
+        }
+
+        void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+            std::cout << "Final: \n";
+            std::cout << "Cont: " << h.address() << '\n';
+            // The coroutine is now suspended at the final-suspend point.
+            // Lookup its continuation in the promise and resume it.
+            if (h.promise().continuation) {
+                //h.promise().continuation.resume();
+            }
+
+            //if (h.promise().continuation)
+             //   h.promise().continuation.promise().next = {};
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    auto initial_suspend() noexcept { return initial_awaiter{}; }
+    auto final_suspend() noexcept {
+        return final_awaiter{};
+    }
 
     void unhandled_exception() noexcept {
         result = std::current_exception();
@@ -78,6 +115,9 @@ struct Promise {
     }
 
     std::variant<std::monostate, T, std::exception_ptr> result{};
+
+    std::coroutine_handle<Promise<T>> continuation{};
+    std::coroutine_handle<> next{};
 
     T&& getResult() {
         if (result.index() == 2)
@@ -91,8 +131,26 @@ struct Promise<void> {
     friend struct Task<void>;
     Task<void> get_return_object() noexcept;
 
+    struct final_awaiter {
+        bool await_ready() noexcept {
+            return false;
+        }
+
+        void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+            // The coroutine is now suspended at the final-suspend point.
+            // Lookup its continuation in the promise and resume it.
+            if (h.promise().continuation) {
+                //h.promise().continuation.resume();
+            }
+        }
+
+        void await_resume() noexcept {}
+    };
+
     auto initial_suspend() noexcept { return std::suspend_always{}; }
-    auto final_suspend() noexcept { return std::suspend_always{}; }
+    auto final_suspend() noexcept {
+        return final_awaiter{};
+    }
 
     void unhandled_exception() noexcept {
         result = std::current_exception();
@@ -101,6 +159,9 @@ struct Promise<void> {
     void return_void() noexcept {}
 
     std::variant<std::monostate, std::exception_ptr> result{};
+
+    std::coroutine_handle<Promise<void>> continuation{};
+    std::coroutine_handle<> next{};
 
     void getResult() {
         if (result.index() == 1)
@@ -112,31 +173,62 @@ struct Promise<void> {
 template<class T>
 struct Task {
     using promise_type = Promise<T>;
-    auto operator co_await() {
-        struct Awaiter {
-            [[nodiscard]] bool await_ready() const noexcept { return false; }
-            void await_suspend(std::coroutine_handle<>) const noexcept {
-                // The void-returning version of await_suspend() unconditionally transfers execution back to the
-                // caller/resumer of the coroutine when the call to await_suspend() returns, whereas the bool-returning
-                // version allows the awaiter object to conditionally resume the coroutine immediately without returning
-                // to the caller/resumer.
-            }
-            void await_resume() const noexcept {
-                // The return-value of the await_resume() method call becomes the result of the co_await expression.
-                // The await_resume() method can also throw an exception in which case the exception propagates out of the
-                // co_await expression.
-            }
-        };
 
-        return Awaiter{};
+    struct Awaiter {
+        [[nodiscard]] bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<promise_type> continuation) const noexcept {
+            std::cout << "Await Suspend: " << coro_.address() << '\n';
+            std::cout << "Cont: " << continuation.address() << '\n';
+            // The void-returning version of await_suspend() unconditionally transfers execution back to the
+            // caller/resumer of the coroutine when the call to await_suspend() returns, whereas the bool-returning
+            // version allows the awaiter object to conditionally resume the coroutine immediately without returning
+            // to the caller/resumer.
+
+            // Store the continuation in the task's promise so that the final_suspend()
+            // knows to resume this coroutine when the task completes.
+            coro_.promise().continuation = continuation;
+
+            continuation.promise().next = coro_;
+
+            std::cout << "Next: " << continuation.promise().next.address() << " <- " << continuation.address() << '\n';
+
+            // Then we resume the task's coroutine, which is currently suspended
+            // at the initial-suspend-point (ie. at the open curly brace).
+
+            //std::cout << "Resuming: " << coro_.address() << '\n';
+            //coro_.resume();
+        }
+        void await_resume() const noexcept {
+            std::cout << "Await resume: " << coro_.address() << '\n';
+            // The return-value of the await_resume() method call becomes the result of the co_await expression.
+            // The await_resume() method can also throw an exception in which case the exception propagates out of the
+            // co_await expression.
+            if (coro_) {
+                std::cout << "Next resume: " << coro_.promise().next.address() << '\n';
+                //coro_.promise().next.resume();
+            }
+            coro_.resume();
+        }
+
+        explicit Awaiter(std::coroutine_handle<Task::promise_type> h) noexcept : coro_(h) {}
+
+        std::coroutine_handle<Task::promise_type> coro_{};
+    };
+
+
+    auto operator co_await() {
+
+        return Awaiter{handle.raw_handle()};
     }
 
     explicit Task(std::coroutine_handle<promise_type> h) {
+        std::cout << "Task: " << h.address() << '\n';
         handle = static_cast<owning_handle<promise_type>>(h);
     }
 
     void step() {
         assert(!handle.done());
+        std::cout << "Step resume: " << handle.raw_handle().address() << '\n';
         handle.resume();
     }
 
@@ -147,6 +239,8 @@ struct Task {
             return handle.promise().getResult();
         }
     }
+
+    bool done() const { return handle.done(); }
 
     owning_handle<promise_type> handle;
 };

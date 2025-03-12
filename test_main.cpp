@@ -8,15 +8,23 @@
 
 TEST_CASE("Test function", "[test]") {
     int state = 0;
+
+    auto foo = [&] -> Task<int> {
+        state = state * 10 + 3;
+        co_return 1;
+    };
+
     auto bar = [&] -> Task<int> {
-        state = 2;
+        state = state * 10 + 2;
+        co_await foo();
+        state = state * 10 + 4;
         co_return 1;
     };
 
     auto coro = [&] -> Task<int> {
-        state = 1;
+        state = state * 10 + 1;
         co_await bar();
-        state = 3;
+        state = state * 10 + 5;
         co_return 2;
     };
 
@@ -25,7 +33,8 @@ TEST_CASE("Test function", "[test]") {
     task.step();
     REQUIRE(state == 1);
     task.step();
-    REQUIRE(state == 3);
+    REQUIRE(state == 125);
+    REQUIRE(task.done());
 
     auto v = task.get();
     REQUIRE(v == 2);
