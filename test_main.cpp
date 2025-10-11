@@ -33,6 +33,38 @@ Task<std::string> string_task() {
     co_return "Hello from coroutine";
 }
 
+// Coroutines using co_await
+Task<int> async_add(int a, int b) {
+    co_return a + b;
+}
+
+Task<int> chained_calculation() {
+    int result1 = co_await async_add(5, 10);
+    int result2 = co_await async_add(result1, 20);
+    co_return result2;
+}
+
+Task<int> parallel_style_calculation() {
+    auto task1 = async_add(5, 10);
+    auto task2 = async_add(3, 7);
+
+    int result1 = co_await task1;
+    int result2 = co_await task2;
+
+    co_return result1 + result2;
+}
+
+Task<void> async_void_operation() {
+    co_await void_task();
+    co_return;
+}
+
+Task<int> async_exception_propagation() {
+    co_await throwing_task();
+    co_return 999;  // Never reached
+}
+
+// Tests
 TEST_CASE("Task: Simple calculation", "[task]") {
     auto task = calculate_async(7);
     REQUIRE_FALSE(task.done());
@@ -121,5 +153,45 @@ TEST_CASE("Task: Multiple return values", "[task]") {
 
         auto task3 = calculate_async(-5);
         REQUIRE(task3.get() == 0);
+    }
+}
+
+TEST_CASE("Task: co_await chained calculation", "[task][await]") {
+    auto task = chained_calculation();
+    // result1 = 5 + 10 = 15
+    // result2 = 15 + 20 = 35
+    int result = task.get();
+    REQUIRE(result == 35);
+}
+
+TEST_CASE("Task: co_await parallel style", "[task][await]") {
+    auto task = parallel_style_calculation();
+    // task1 = 5 + 10 = 15
+    // task2 = 3 + 7 = 10
+    // total = 15 + 10 = 25
+    int result = task.get();
+    REQUIRE(result == 25);
+}
+
+TEST_CASE("Task: co_await void task", "[task][await]") {
+    auto task = async_void_operation();
+    REQUIRE_NOTHROW(task.get());
+}
+
+TEST_CASE("Task: co_await exception propagation", "[task][await]") {
+    auto task = async_exception_propagation();
+    REQUIRE_THROWS_AS(task.get(), std::runtime_error);
+    REQUIRE_THROWS_WITH(task.get(), "Oops!");
+}
+
+TEST_CASE("Task: co_await vs get() comparison", "[task][await]") {
+    SECTION("Using co_await") {
+        auto task = chained_calculation();
+        REQUIRE(task.get() == 35);
+    }
+
+    SECTION("Using get() only") {
+        auto task = complex_calculation();
+        REQUIRE(task.get() == 50);
     }
 }

@@ -60,6 +60,30 @@ public:
 
     bool done() const { return handle.done(); }
 
+    // Awaiter for co_await support
+    struct awaiter {
+        handle_type coro;
+
+        bool await_ready() {
+            return coro.done();
+        }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting) {
+            return coro;
+        }
+
+        T await_resume() {
+            if (coro.promise().exception) {
+                std::rethrow_exception(coro.promise().exception);
+            }
+            return std::move(coro.promise().value);
+        }
+    };
+
+    awaiter operator co_await() {
+        return awaiter{handle};
+    }
+
 private:
     handle_type handle;
 };
@@ -116,6 +140,29 @@ public:
     }
 
     bool done() const { return handle.done(); }
+
+    // Awaiter for co_await support
+    struct awaiter {
+        handle_type coro;
+
+        bool await_ready() {
+            return coro.done();
+        }
+
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting) {
+            return coro;
+        }
+
+        void await_resume() {
+            if (coro.promise().exception) {
+                std::rethrow_exception(coro.promise().exception);
+            }
+        }
+    };
+
+    awaiter operator co_await() {
+        return awaiter{handle};
+    }
 
 private:
     handle_type handle;
