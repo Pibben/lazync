@@ -10,13 +10,28 @@ public:
     struct promise_type {
         T value;
         std::exception_ptr exception;
+        std::coroutine_handle<> continuation;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         std::suspend_always initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+
+        struct final_awaiter {
+            bool await_ready() noexcept { return false; }
+
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                if (h.promise().continuation) {
+                    return h.promise().continuation;
+                }
+                return std::noop_coroutine();
+            }
+
+            void await_resume() noexcept {}
+        };
+
+        final_awaiter final_suspend() noexcept { return {}; }
 
         void return_value(T val) {
             value = std::move(val);
@@ -69,6 +84,7 @@ public:
         }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting) {
+            coro.promise().continuation = awaiting;
             return coro;
         }
 
@@ -94,13 +110,28 @@ class Task<void> {
 public:
     struct promise_type {
         std::exception_ptr exception;
+        std::coroutine_handle<> continuation;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         std::suspend_always initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
+
+        struct final_awaiter {
+            bool await_ready() noexcept { return false; }
+
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                if (h.promise().continuation) {
+                    return h.promise().continuation;
+                }
+                return std::noop_coroutine();
+            }
+
+            void await_resume() noexcept {}
+        };
+
+        final_awaiter final_suspend() noexcept { return {}; }
 
         void return_void() {}
 
@@ -150,6 +181,7 @@ public:
         }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting) {
+            coro.promise().continuation = awaiting;
             return coro;
         }
 

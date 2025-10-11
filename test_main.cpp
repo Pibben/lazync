@@ -64,6 +64,17 @@ Task<int> async_exception_propagation() {
     co_return 999;  // Never reached
 }
 
+Task<int> test_await_resume(int* counter) {
+    (*counter)++;
+    co_return 42;
+}
+
+Task<int> verify_await_resume_called(int* counter) {
+    int result = co_await test_await_resume(counter);
+    (*counter) += 100;  // This proves await_resume was called and returned the value
+    co_return result;
+}
+
 // Tests
 TEST_CASE("Task: Simple calculation", "[task]") {
     auto task = calculate_async(7);
@@ -194,4 +205,15 @@ TEST_CASE("Task: co_await vs get() comparison", "[task][await]") {
         auto task = complex_calculation();
         REQUIRE(task.get() == 50);
     }
+}
+
+TEST_CASE("Task: await_resume is called", "[task][await]") {
+    int counter = 0;
+    auto task = verify_await_resume_called(&counter);
+
+    int result = task.get();
+
+    // Counter should be 1 (from test_await_resume) + 100 (after await_resume)
+    REQUIRE(counter == 101);
+    REQUIRE(result == 42);
 }
