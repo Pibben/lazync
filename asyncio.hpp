@@ -10,45 +10,54 @@ template<typename promise_type>
 struct owning_handle {
     owning_handle() = default;
 
-    explicit owning_handle(std::nullptr_t) : handle_(nullptr) {
-    }
+    explicit owning_handle(std::nullptr_t) noexcept : handle_(nullptr) {}
 
-    explicit owning_handle(std::coroutine_handle<promise_type> handle) : handle_(std::move(handle)) {
-    }
+    explicit owning_handle(std::coroutine_handle<promise_type> handle) noexcept : handle_(handle) {}
 
-    owning_handle(const owning_handle<promise_type> &) = delete;
+    owning_handle(const owning_handle &) = delete;
+    owning_handle &operator=(const owning_handle &) = delete;
 
-    owning_handle(owning_handle<promise_type> &&other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {
-    }
+    owning_handle(owning_handle &&other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
 
-    owning_handle<promise_type> &operator=(const owning_handle<promise_type> &) = delete;
-
-    owning_handle<promise_type> &operator=(owning_handle<promise_type> &&other) noexcept {
-        handle_ = std::exchange(other.handle_, nullptr);
+    owning_handle &operator=(owning_handle &&other) noexcept {
+        if (this != &other) {
+            if (handle_)
+                handle_.destroy();
+            handle_ = std::exchange(other.handle_, nullptr);
+        }
         return *this;
     }
 
+    ~owning_handle() {
+        if (handle_)
+            handle_.destroy();
+    }
+
     promise_type &promise() const {
+        assert(handle_);
         return handle_.promise();
     }
 
     [[nodiscard]] bool done() const {
-        assert(handle_ != nullptr);
+        assert(handle_);
         return handle_.done();
     }
 
     void resume() const {
-        assert(handle_ != nullptr);
-        return handle_.resume();
+        assert(handle_);
+        handle_.resume();
     }
 
-    [[nodiscard]] std::coroutine_handle<promise_type> raw_handle() const {
+    [[nodiscard]] std::coroutine_handle<promise_type> raw_handle() const noexcept {
         return handle_;
     }
 
-    ~owning_handle() {
-        if (handle_ != nullptr)
-            handle_.destroy();
+    std::coroutine_handle<promise_type> release() noexcept {
+        return std::exchange(handle_, nullptr);
+    }
+
+    explicit operator bool() const noexcept {
+        return handle_ != nullptr;
     }
 
 private:
