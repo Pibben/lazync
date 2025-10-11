@@ -91,13 +91,15 @@ TEST_CASE("Task: Move semantics", "[task]") {
     REQUIRE(task3.get() == 24);
 }
 
+Task<int> lazy_evaluation_task(bool* executed) {
+    *executed = true;
+    co_return 42;
+}
+
 TEST_CASE("Task: Lazy evaluation", "[task]") {
     bool executed = false;
 
-    auto lazy_task = [&]() -> Task<int> {
-        //executed = true;
-        co_return 42;
-    }();
+    auto lazy_task = lazy_evaluation_task(&executed);
 
     // Task hasn't executed yet
     REQUIRE_FALSE(executed);
@@ -105,7 +107,7 @@ TEST_CASE("Task: Lazy evaluation", "[task]") {
 
     // Now it executes
     int result = lazy_task.get();
-    //REQUIRE(executed);
+    REQUIRE(executed);
     REQUIRE(result == 42);
 }
 
