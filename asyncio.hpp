@@ -80,7 +80,7 @@ struct Promise {
         }
 
         void await_suspend(std::coroutine_handle<Promise> h) noexcept {
-            std::cout << "Init await suspend\n";
+            std::cout << "Init await suspend: " << h.address() << '\n';
         }
 
         void await_resume() noexcept {
@@ -187,7 +187,7 @@ struct Task {
         [[nodiscard]] bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<promise_type> continuation) const noexcept {
             std::cout << "Await Suspend: " << coro_.address() << '\n';
-            std::cout << "Cont: " << continuation.address() << '\n';
+            std::cout << "  Cont: " << continuation.address() << '\n';
             // The void-returning version of await_suspend() unconditionally transfers execution back to the
             // caller/resumer of the coroutine when the call to await_suspend() returns, whereas the bool-returning
             // version allows the awaiter object to conditionally resume the coroutine immediately without returning
@@ -199,7 +199,7 @@ struct Task {
 
             continuation.promise().next = coro_;
 
-            std::cout << "Next: " << continuation.promise().next.address() << " <- " << continuation.address() << '\n';
+            std::cout << "  Next: " << continuation.promise().next.address() << " <- " << continuation.address() << '\n';
 
             // Then we resume the task's coroutine, which is currently suspended
             // at the initial-suspend-point (ie. at the open curly brace).
@@ -213,7 +213,7 @@ struct Task {
             // The await_resume() method can also throw an exception in which case the exception propagates out of the
             // co_await expression.
             if (coro_) {
-                std::cout << "Next resume: " << coro_.promise().next.address() << '\n';
+                std::cout << "  Next resume: " << coro_.promise().next.address() << '\n';
                 //coro_.promise().next.resume();
             }
             coro_.resume();
