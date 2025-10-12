@@ -75,6 +75,48 @@ Task<int> verify_await_resume_called(int* counter) {
     co_return result;
 }
 
+// Nested Task-returning functions
+Task<int> level1_task(int value) {
+    co_return value * 2;
+}
+
+Task<int> level2_task(int value) {
+    int result = co_await level1_task(value);
+    co_return result + 10;
+}
+
+Task<int> level3_task(int value) {
+    int result = co_await level2_task(value);
+    co_return result * 3;
+}
+
+Task<int> level4_task(int value) {
+    int result = co_await level3_task(value);
+    co_return result + 5;
+}
+
+// Multiple nested awaits in sequence
+Task<int> deeply_nested_sequential() {
+    int a = co_await level1_task(5);   // 5 * 2 = 10
+    int b = co_await level1_task(a);   // 10 * 2 = 20
+    int c = co_await level2_task(b);   // (20 * 2) + 10 = 50
+    int d = co_await level3_task(c);   // ((50 * 2) + 10) * 3 = 330
+    co_return d;
+}
+
+// Nested with multiple parallel tasks
+Task<int> nested_parallel() {
+    auto task1 = level2_task(5);  // (5 * 2) + 10 = 20
+    auto task2 = level2_task(3);  // (3 * 2) + 10 = 16
+
+    int result1 = co_await task1;
+    int result2 = co_await task2;
+
+    // Now use those results in another nested call
+    int final_result = co_await level3_task(result1 + result2);  // ((36 * 2) + 10) * 3 = 246
+    co_return final_result;
+}
+
 // Tests
 TEST_CASE("Task: Simple calculation", "[task]") {
     auto task = calculate_async(7);
@@ -216,4 +258,42 @@ TEST_CASE("Task: await_resume is called", "[task][await]") {
     // Counter should be 1 (from test_await_resume) + 100 (after await_resume)
     REQUIRE(counter == 101);
     REQUIRE(result == 42);
+}
+
+TEST_CASE("Task: Nested co_await - single chain", "[task][await][nested]") {
+    SECTION("2 levels deep") {
+        auto task = level2_task(5);
+        // (5 * 2) + 10 = 20
+        REQUIRE(task.get() == 20);
+    }
+
+    SECTION("3 levels deep") {
+        auto task = level3_task(5);
+        // ((5 * 2) + 10) * 3 = 60
+        REQUIRE(task.get() == 60);
+    }
+
+    SECTION("4 levels deep") {
+        auto task = level4_task(5);
+        // (((5 * 2) + 10) * 3) + 5 = 65
+        REQUIRE(task.get() == 65);
+    }
+}
+
+TEST_CASE("Task: Deeply nested sequential awaits", "[task][await][nested]") {
+    auto task = deeply_nested_sequential();
+    // a = 5 * 2 = 10
+    // b = 10 * 2 = 20
+    // c = (20 * 2) + 10 = 50
+    // d = ((50 * 2) + 10) * 3 = 330
+    REQUIRE(task.get() == 330);
+}
+
+TEST_CASE("Task: Nested with parallel tasks", "[task][await][nested]") {
+    auto task = nested_parallel();
+    // task1 = (5 * 2) + 10 = 20
+    // task2 = (3 * 2) + 10 = 16
+    // sum = 36
+    // final = ((36 * 2) + 10) * 3 = 246
+    REQUIRE(task.get() == 246);
 }
