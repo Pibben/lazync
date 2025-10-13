@@ -17,7 +17,10 @@ FetchContent_MakeAvailable(Catch2)
 
 # Add the test executable
 add_executable(test_main test_main.cpp
-        asyncio.hpp)
+        utils.hpp
+        scheduler.hpp
+        task.hpp
+        timer.hpp)
 
 # Link Catch2 with the test executable
 target_link_libraries(test_main PRIVATE Catch2::Catch2WithMain)
