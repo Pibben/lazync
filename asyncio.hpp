@@ -314,7 +314,7 @@ SleepAwaitable sleep_ms(int milliseconds) {
     return SleepAwaitable{std::chrono::milliseconds(milliseconds)};
 }
 
-// Simpler when_all for sleep operations (awaitables, not Tasks)
+// when_all for any awaitables (including SleepAwaitable and Task)
 template<typename... Awaitables>
 class WhenAllAwaitable {
 public:
@@ -329,11 +329,17 @@ public:
         awaiting_ = awaiting_coro;
         remaining_count_ = sizeof...(Awaitables);
 
-        // Create wrapper coroutines for each awaitable
+        // Create and store wrapper tasks to keep them alive
         start_all(std::index_sequence_for<Awaitables...>{});
     }
 
-    void await_resume() {}
+    void await_resume() {
+        // Clean up wrapper tasks
+        for (auto* task : wrapper_tasks_) {
+            delete task;
+        }
+        wrapper_tasks_.clear();
+    }
 
 private:
     template<size_t... Is>
@@ -343,13 +349,16 @@ private:
 
     template<size_t I>
     void start_one() {
-        auto wrapper = [](WhenAllAwaitable* parent, auto awaitable) -> Task<void> {
-            co_await awaitable;
-            parent->on_complete();
-        };
+        // Create a wrapper task that awaits the awaitable
+        auto* task_ptr = new Task<void>(create_wrapper<I>());
+        wrapper_tasks_.push_back(task_ptr);
+        task_ptr->get_handle().resume();
+    }
 
-        auto task = wrapper(this, std::get<I>(awaitables_));
-        task.get_handle().resume();
+    template<size_t I>
+    Task<void> create_wrapper() {
+        co_await std::get<I>(awaitables_);
+        on_complete();
     }
 
     void on_complete() {
@@ -361,13 +370,14 @@ private:
     std::tuple<Awaitables...> awaitables_;
     std::coroutine_handle<> awaiting_;
     std::atomic<size_t> remaining_count_{0};
+    std::vector<Task<void>*> wrapper_tasks_;
 };
 
 template<typename... Awaitables>
 auto when_all(Awaitables... awaitables) {
     return WhenAllAwaitable<Awaitables...>(awaitables...);
 }
-
+#if 0
 // when_all implementation
 template<typename... Tasks>
 class WhenAllAwaitable {
@@ -465,3 +475,4 @@ template<typename... Tasks>
 auto when_all(Tasks&&... tasks) {
     return WhenAllAwaitable<Tasks...>(std::forward<Tasks>(tasks)...);
 }
+#endif
