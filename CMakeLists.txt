@@ -16,8 +16,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(Catch2)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBUV REQUIRED libuv)
+
 add_library(lazync INTERFACE)
-target_include_directories(lazync INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(lazync INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${LIBUV_INCLUDE_DIRS}
+)
+
+target_link_libraries(lazync INTERFACE ${LIBUV_LIBRARIES})
 
 add_executable(test_main test_main.cpp)
 
