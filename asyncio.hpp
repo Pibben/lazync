@@ -79,6 +79,12 @@ public:
         if (!handle.done()) {
             handle.resume();
         }
+
+        // Wait for the coroutine to actually complete
+        while (!handle.done()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         if (handle.promise().exception) {
             std::rethrow_exception(handle.promise().exception);
         }
@@ -180,6 +186,12 @@ public:
         if (!handle.done()) {
             handle.resume();
         }
+
+        // Wait for the coroutine to actually complete
+        while (!handle.done()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         if (handle.promise().exception) {
             std::rethrow_exception(handle.promise().exception);
         }
@@ -305,43 +317,45 @@ struct SleepAwaitable {
     void await_resume() {}
 };
 
-// Sleep function
-SleepAwaitable sleep(int seconds) {
-    return SleepAwaitable{std::chrono::milliseconds(seconds * 1000)};
+Task<void> sleep(int seconds) {
+    co_await SleepAwaitable{std::chrono::milliseconds(seconds * 1000)};
 }
 
-SleepAwaitable sleep_ms(int milliseconds) {
-    return SleepAwaitable{std::chrono::milliseconds(milliseconds)};
+Task<void> sleep_ms(int milliseconds) {
+    co_await SleepAwaitable{std::chrono::milliseconds(milliseconds)};
 }
 
-// when_all for any awaitables (including SleepAwaitable and Task)
-template<typename... Awaitables>
+// when_all for Tasks - stores completion handlers to keep them alive
+template<typename... Tasks>
 class WhenAllAwaitable {
 public:
-    explicit WhenAllAwaitable(Awaitables... awaitables)
-        : awaitables_(std::make_tuple(awaitables...)) {}
+    explicit WhenAllAwaitable(Tasks&&... tasks)
+        : tasks_(std::forward<Tasks>(tasks)...)
+        , state_(std::make_shared<State>()) {
+        state_->remaining_count = sizeof...(Tasks);
+        state_->completion_handlers.reserve(sizeof...(Tasks));
+    }
 
     bool await_ready() {
         return false;
     }
 
     void await_suspend(std::coroutine_handle<> awaiting_coro) {
-        awaiting_ = awaiting_coro;
-        remaining_count_ = sizeof...(Awaitables);
+        state_->awaiting = awaiting_coro;
 
-        // Create and store wrapper tasks to keep them alive
-        start_all(std::index_sequence_for<Awaitables...>{});
+        // Start all tasks
+        start_all(std::index_sequence_for<Tasks...>{});
     }
 
-    void await_resume() {
-        // Clean up wrapper tasks
-        for (auto* task : wrapper_tasks_) {
-            delete task;
-        }
-        wrapper_tasks_.clear();
-    }
+    void await_resume() {}
 
 private:
+    struct State {
+        std::coroutine_handle<> awaiting;
+        std::atomic<size_t> remaining_count{0};
+        std::vector<Task<void>> completion_handlers;
+    };
+
     template<size_t... Is>
     void start_all(std::index_sequence<Is...>) {
         (start_one<Is>(), ...);
@@ -349,130 +363,42 @@ private:
 
     template<size_t I>
     void start_one() {
-        // Create a wrapper task that awaits the awaitable
-        auto* task_ptr = new Task<void>(create_wrapper<I>());
-        wrapper_tasks_.push_back(task_ptr);
-        task_ptr->get_handle().resume();
-    }
-
-    template<size_t I>
-    Task<void> create_wrapper() {
-        co_await std::get<I>(awaitables_);
-        on_complete();
-    }
-
-    void on_complete() {
-        if (--remaining_count_ == 0) {
-            awaiting_.resume();
-        }
-    }
-
-    std::tuple<Awaitables...> awaitables_;
-    std::coroutine_handle<> awaiting_;
-    std::atomic<size_t> remaining_count_{0};
-    std::vector<Task<void>*> wrapper_tasks_;
-};
-
-template<typename... Awaitables>
-auto when_all(Awaitables... awaitables) {
-    return WhenAllAwaitable<Awaitables...>(awaitables...);
-}
-#if 0
-// when_all implementation
-template<typename... Tasks>
-class WhenAllAwaitable {
-public:
-    explicit WhenAllAwaitable(Tasks&&... tasks)
-        : tasks_(std::forward<Tasks>(tasks)...) {}
-
-    bool await_ready() {
-        return false;  // Always suspend to start all tasks
-    }
-
-    void await_suspend(std::coroutine_handle<> awaiting_coro) {
-        awaiting_ = awaiting_coro;
-        remaining_count_ = sizeof...(Tasks);
-
-        // Start all tasks
-        start_all(std::index_sequence_for<Tasks...>{});
-    }
-
-    auto await_resume() {
-        // Return a tuple of results
-        return get_results(std::index_sequence_for<Tasks...>{});
-    }
-
-private:
-    template<size_t... Is>
-    void start_all(std::index_sequence<Is...>) {
-        // Start each task with a callback
-        (start_task<Is>(), ...);
-    }
-
-    template<size_t I>
-    void start_task() {
         auto& task = std::get<I>(tasks_);
         auto handle = task.get_handle();
 
-        // Set continuation to our completion handler
-        handle.promise().continuation =
-            std::coroutine_handle<CompletionPromise>::from_promise(
-                *new CompletionPromise{this}
-            );
+        // Create and store a completion handler
+        auto completion_handler = create_completion_coro(state_);
+        auto completion_handle = completion_handler.get_handle();
+        state_->completion_handlers.push_back(std::move(completion_handler));
+
+        // Set continuation
+        handle.promise().continuation = completion_handle;
 
         // Start the task
         handle.resume();
     }
 
-    void on_task_complete() {
-        if (--remaining_count_ == 0) {
-            // All tasks done, resume the awaiting coroutine
-            awaiting_.resume();
-        }
+    static Task<void> create_completion_coro(std::shared_ptr<State> state) {
+        struct Awaiter {
+            std::shared_ptr<State> state;
+            bool await_ready() { return false; }
+            void await_suspend(std::coroutine_handle<>) {
+                size_t remaining = --(state->remaining_count);
+                if (remaining == 0) {
+                    state->awaiting.resume();
+                }
+            }
+            void await_resume() {}
+        };
+
+        co_await Awaiter{state};
     }
-
-    template<size_t... Is>
-    auto get_results(std::index_sequence<Is...>) {
-        return std::make_tuple(get_result<Is>()...);
-    }
-
-    template<size_t I>
-    auto get_result() {
-        auto& task = std::get<I>(tasks_);
-        auto& promise = task.get_handle().promise();
-
-        if (promise.exception) {
-            std::rethrow_exception(promise.exception);
-        }
-
-        if constexpr (std::is_void_v<decltype(task.get_handle().promise().value)>) {
-            return;
-        } else {
-            return std::move(promise.value);
-        }
-    }
-
-    // Helper promise for completion callbacks
-    struct CompletionPromise {
-        WhenAllAwaitable* parent;
-
-        std::suspend_never initial_suspend() { return {}; }
-        std::suspend_never final_suspend() noexcept {
-            parent->on_task_complete();
-            return {};
-        }
-        void return_void() {}
-        void unhandled_exception() {}
-        auto get_return_object() { return std::coroutine_handle<CompletionPromise>::from_promise(*this); }
-    };
 
     std::tuple<Tasks...> tasks_;
-    std::coroutine_handle<> awaiting_;
-    std::atomic<size_t> remaining_count_{0};
+    std::shared_ptr<State> state_;
 };
 
 template<typename... Tasks>
 auto when_all(Tasks&&... tasks) {
     return WhenAllAwaitable<Tasks...>(std::forward<Tasks>(tasks)...);
 }
-#endif
