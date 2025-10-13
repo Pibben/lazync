@@ -297,3 +297,194 @@ TEST_CASE("Task: Nested with parallel tasks", "[task][await][nested]") {
     // final = ((36 * 2) + 10) * 3 = 246
     REQUIRE(task.get() == 246);
 }
+
+
+Task<void> parallel_sleeps() {
+    co_await sleep_ms(200);
+    co_await sleep_ms(200);
+}
+
+Task<void> sequential_operations() {
+    co_await sleep_ms(100);
+    co_await sleep_ms(100);
+    co_await sleep_ms(100);
+}
+
+Task<int> compute_with_delay() {
+    co_await sleep_ms(100);
+    co_return 42;
+}
+
+Task<void> mixed_operations() {
+    int result = co_await compute_with_delay();
+    co_await sleep_ms(100);
+}
+
+// TRUE PARALLEL EXAMPLE using when_all
+Task<void> truly_parallel_sleeps() {
+    co_await when_all(sleep_ms(200), sleep_ms(200));
+}
+
+Task<void> parallel_multiple_sleeps() {
+    co_await when_all(sleep_ms(100), sleep_ms(100), sleep_ms(100), sleep_ms(100));
+}
+
+Task<int> parallel_compute() {
+    co_await when_all(sleep_ms(100), sleep_ms(150));
+    co_return 99;
+}
+
+TEST_CASE("Scheduler: Sequential sleeps take cumulative time", "[scheduler][sequential]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = parallel_sleeps();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Two 200ms sleeps should take ~400ms
+    REQUIRE(duration >= 380);
+    REQUIRE(duration < 450);
+}
+
+TEST_CASE("Scheduler: Multiple sequential operations", "[scheduler][sequential]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = sequential_operations();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Three 100ms sleeps should take ~300ms
+    REQUIRE(duration >= 280);
+    REQUIRE(duration < 350);
+}
+
+TEST_CASE("Scheduler: Compute with delay returns correct value", "[scheduler]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = compute_with_delay();
+    int result = task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    REQUIRE(result == 42);
+    REQUIRE(duration >= 90);
+    REQUIRE(duration < 150);
+}
+
+TEST_CASE("Scheduler: when_all runs operations in parallel", "[scheduler][parallel][when_all]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = truly_parallel_sleeps();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Two parallel 200ms sleeps should take ~200ms, NOT 400ms
+    REQUIRE(duration >= 180);
+    REQUIRE(duration < 250);
+}
+
+TEST_CASE("Scheduler: when_all with multiple operations", "[scheduler][parallel][when_all]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = parallel_multiple_sleeps();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Four parallel 100ms sleeps should take ~100ms, NOT 400ms
+    REQUIRE(duration >= 90);
+    REQUIRE(duration < 150);
+}
+
+TEST_CASE("Scheduler: when_all returns after longest operation", "[scheduler][parallel][when_all]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = parallel_compute();
+    int result = task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    REQUIRE(result == 99);
+    // Should wait for the longest (150ms), not the sum (250ms)
+    REQUIRE(duration >= 140);
+    REQUIRE(duration < 200);
+}
+
+TEST_CASE("Scheduler: Comparison of sequential vs parallel", "[scheduler][comparison]") {
+    SECTION("Sequential execution") {
+        auto start = std::chrono::steady_clock::now();
+
+        auto task = []() -> Task<void> {
+            co_await sleep_ms(100);
+            co_await sleep_ms(100);
+        }();
+        task.get();
+
+        auto end = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+        REQUIRE(duration >= 190);  // ~200ms
+    }
+
+    SECTION("Parallel execution") {
+        auto start = std::chrono::steady_clock::now();
+
+        auto task = []() -> Task<void> {
+            co_await when_all(sleep_ms(100), sleep_ms(100));
+        }();
+        task.get();
+
+        auto end = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+        REQUIRE(duration < 150);  // ~100ms
+    }
+}
+
+TEST_CASE("Scheduler: Mixed sequential and parallel operations", "[scheduler][mixed]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = []() -> Task<void> {
+        // First: parallel 100ms operations
+        co_await when_all(sleep_ms(100), sleep_ms(100));
+
+        // Then: sequential 100ms operation
+        co_await sleep_ms(100);
+
+        // Finally: parallel again
+        co_await when_all(sleep_ms(50), sleep_ms(50), sleep_ms(50));
+    }();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Total: 100 (parallel) + 100 (sequential) + 50 (parallel) = 250ms
+    REQUIRE(duration >= 230);
+    REQUIRE(duration < 300);
+}
+
+TEST_CASE("Scheduler: when_all with different durations", "[scheduler][parallel][when_all]") {
+    auto start = std::chrono::steady_clock::now();
+
+    auto task = []() -> Task<void> {
+        co_await when_all(sleep_ms(50), sleep_ms(100), sleep_ms(150));
+    }();
+    task.get();
+
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    // Should take as long as the longest operation (150ms)
+    REQUIRE(duration >= 140);
+    REQUIRE(duration < 200);
+}
