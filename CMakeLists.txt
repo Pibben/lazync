@@ -3,6 +3,8 @@ project(Catch2TestExample)
 
 set(CMAKE_CXX_STANDARD 23)
 
+add_compile_options(-Wall -Wextra -pedantic -Werror)
+
 # Enable testing in CMake
 enable_testing()
 

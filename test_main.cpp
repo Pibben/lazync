@@ -317,7 +317,7 @@ Task<int> compute_with_delay() {
 }
 
 Task<void> mixed_operations() {
-    int result = co_await compute_with_delay();
+    co_await compute_with_delay();
     co_await sleep_ms(100);
 }
 
