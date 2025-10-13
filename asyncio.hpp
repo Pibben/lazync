@@ -1,7 +1,18 @@
 #include <coroutine>
 #include <exception>
 #include <utility>
-#include <string>
+#include <queue>
+#include <functional>
+#include <thread>
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <vector>
+
+// Forward declarations
+class Scheduler;
+Scheduler& get_scheduler();
 
 // Task implementation
 template<typename T = void>
@@ -11,6 +22,7 @@ public:
         T value;
         std::exception_ptr exception;
         std::coroutine_handle<> continuation;
+        Scheduler* scheduler = nullptr;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -100,6 +112,8 @@ public:
         return awaiter{handle};
     }
 
+    handle_type get_handle() { return handle; }
+
 private:
     handle_type handle;
 };
@@ -111,6 +125,7 @@ public:
     struct promise_type {
         std::exception_ptr exception;
         std::coroutine_handle<> continuation;
+        Scheduler* scheduler = nullptr;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -196,6 +211,257 @@ public:
         return awaiter{handle};
     }
 
+    handle_type get_handle() { return handle; }
+
 private:
     handle_type handle;
 };
+
+// Simple Scheduler for managing timed tasks
+class Scheduler {
+public:
+    struct TimedTask {
+        std::chrono::steady_clock::time_point wake_time;
+        std::coroutine_handle<> coro;
+
+        bool operator>(const TimedTask& other) const {
+            return wake_time > other.wake_time;
+        }
+    };
+
+    Scheduler() : running(true) {
+        worker = std::thread([this]() { this->run(); });
+    }
+
+    ~Scheduler() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            running = false;
+        }
+        cv.notify_one();
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    void schedule_after(std::coroutine_handle<> coro, std::chrono::milliseconds delay) {
+        auto wake_time = std::chrono::steady_clock::now() + delay;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            tasks.push({wake_time, coro});
+        }
+        cv.notify_one();
+    }
+
+    void run() {
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+
+            if (!tasks.empty()) {
+                auto now = std::chrono::steady_clock::now();
+                auto& top = tasks.top();
+
+                if (top.wake_time <= now) {
+                    auto coro = top.coro;
+                    tasks.pop();
+                    lock.unlock();
+                    coro.resume();
+                    continue;
+                }
+
+                // Wait until next task or notification
+                cv.wait_until(lock, top.wake_time);
+            } else {
+                if (!running) break;
+                cv.wait(lock);
+            }
+        }
+    }
+
+private:
+    std::priority_queue<TimedTask, std::vector<TimedTask>, std::greater<TimedTask>> tasks;
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::thread worker;
+    std::atomic<bool> running;
+};
+
+// Global scheduler
+Scheduler& get_scheduler() {
+    static Scheduler scheduler;
+    return scheduler;
+}
+
+// Sleep awaitable that uses the scheduler
+struct SleepAwaitable {
+    std::chrono::milliseconds duration;
+
+    bool await_ready() { return duration.count() == 0; }
+
+    void await_suspend(std::coroutine_handle<> coro) {
+        get_scheduler().schedule_after(coro, duration);
+    }
+
+    void await_resume() {}
+};
+
+// Sleep function
+SleepAwaitable sleep(int seconds) {
+    return SleepAwaitable{std::chrono::milliseconds(seconds * 1000)};
+}
+
+SleepAwaitable sleep_ms(int milliseconds) {
+    return SleepAwaitable{std::chrono::milliseconds(milliseconds)};
+}
+
+// Simpler when_all for sleep operations (awaitables, not Tasks)
+template<typename... Awaitables>
+class WhenAllAwaitable {
+public:
+    explicit WhenAllAwaitable(Awaitables... awaitables)
+        : awaitables_(std::make_tuple(awaitables...)) {}
+
+    bool await_ready() {
+        return false;
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting_coro) {
+        awaiting_ = awaiting_coro;
+        remaining_count_ = sizeof...(Awaitables);
+
+        // Create wrapper coroutines for each awaitable
+        start_all(std::index_sequence_for<Awaitables...>{});
+    }
+
+    void await_resume() {}
+
+private:
+    template<size_t... Is>
+    void start_all(std::index_sequence<Is...>) {
+        (start_one<Is>(), ...);
+    }
+
+    template<size_t I>
+    void start_one() {
+        auto wrapper = [](WhenAllAwaitable* parent, auto awaitable) -> Task<void> {
+            co_await awaitable;
+            parent->on_complete();
+        };
+
+        auto task = wrapper(this, std::get<I>(awaitables_));
+        task.get_handle().resume();
+    }
+
+    void on_complete() {
+        if (--remaining_count_ == 0) {
+            awaiting_.resume();
+        }
+    }
+
+    std::tuple<Awaitables...> awaitables_;
+    std::coroutine_handle<> awaiting_;
+    std::atomic<size_t> remaining_count_{0};
+};
+
+template<typename... Awaitables>
+auto when_all(Awaitables... awaitables) {
+    return WhenAllAwaitable<Awaitables...>(awaitables...);
+}
+
+// when_all implementation
+template<typename... Tasks>
+class WhenAllAwaitable {
+public:
+    explicit WhenAllAwaitable(Tasks&&... tasks)
+        : tasks_(std::forward<Tasks>(tasks)...) {}
+
+    bool await_ready() {
+        return false;  // Always suspend to start all tasks
+    }
+
+    void await_suspend(std::coroutine_handle<> awaiting_coro) {
+        awaiting_ = awaiting_coro;
+        remaining_count_ = sizeof...(Tasks);
+
+        // Start all tasks
+        start_all(std::index_sequence_for<Tasks...>{});
+    }
+
+    auto await_resume() {
+        // Return a tuple of results
+        return get_results(std::index_sequence_for<Tasks...>{});
+    }
+
+private:
+    template<size_t... Is>
+    void start_all(std::index_sequence<Is...>) {
+        // Start each task with a callback
+        (start_task<Is>(), ...);
+    }
+
+    template<size_t I>
+    void start_task() {
+        auto& task = std::get<I>(tasks_);
+        auto handle = task.get_handle();
+
+        // Set continuation to our completion handler
+        handle.promise().continuation =
+            std::coroutine_handle<CompletionPromise>::from_promise(
+                *new CompletionPromise{this}
+            );
+
+        // Start the task
+        handle.resume();
+    }
+
+    void on_task_complete() {
+        if (--remaining_count_ == 0) {
+            // All tasks done, resume the awaiting coroutine
+            awaiting_.resume();
+        }
+    }
+
+    template<size_t... Is>
+    auto get_results(std::index_sequence<Is...>) {
+        return std::make_tuple(get_result<Is>()...);
+    }
+
+    template<size_t I>
+    auto get_result() {
+        auto& task = std::get<I>(tasks_);
+        auto& promise = task.get_handle().promise();
+
+        if (promise.exception) {
+            std::rethrow_exception(promise.exception);
+        }
+
+        if constexpr (std::is_void_v<decltype(task.get_handle().promise().value)>) {
+            return;
+        } else {
+            return std::move(promise.value);
+        }
+    }
+
+    // Helper promise for completion callbacks
+    struct CompletionPromise {
+        WhenAllAwaitable* parent;
+
+        std::suspend_never initial_suspend() { return {}; }
+        std::suspend_never final_suspend() noexcept {
+            parent->on_task_complete();
+            return {};
+        }
+        void return_void() {}
+        void unhandled_exception() {}
+        auto get_return_object() { return std::coroutine_handle<CompletionPromise>::from_promise(*this); }
+    };
+
+    std::tuple<Tasks...> tasks_;
+    std::coroutine_handle<> awaiting_;
+    std::atomic<size_t> remaining_count_{0};
+};
+
+template<typename... Tasks>
+auto when_all(Tasks&&... tasks) {
+    return WhenAllAwaitable<Tasks...>(std::forward<Tasks>(tasks)...);
+}
