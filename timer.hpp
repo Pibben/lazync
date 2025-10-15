@@ -12,12 +12,14 @@
 
 // Sleep awaitable that uses the scheduler
 struct SleepAwaitable {
+    SleepAwaitable(std::chrono::milliseconds duration) : duration(duration) {}
     std::chrono::milliseconds duration;
+    Scheduler::TimerHandle timerHandle;
 
     bool await_ready() { return duration.count() == 0; }
 
     void await_suspend(std::coroutine_handle<> coro) {
-        get_scheduler().schedule_after(coro, duration);
+        get_scheduler().schedule_after(coro, duration, timerHandle);
     }
 
     void await_resume() {}
