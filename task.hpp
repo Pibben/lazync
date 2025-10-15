@@ -5,8 +5,6 @@
 #ifndef CATCH2TESTEXAMPLE_TASK_H
 #define CATCH2TESTEXAMPLE_TASK_H
 
-#include "scheduler.hpp"
-
 #include <coroutine>
 #include <exception>
 
@@ -18,7 +16,6 @@ public:
         T value;
         std::exception_ptr exception;
         std::coroutine_handle<> continuation;
-        Scheduler* scheduler = nullptr;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -71,22 +68,6 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    T get() {
-        if (!handle.done()) {
-            handle.resume();
-        }
-
-        // Wait for the coroutine to actually complete
-        while (!handle.done()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-
-        if (handle.promise().exception) {
-            std::rethrow_exception(handle.promise().exception);
-        }
-        return std::move(handle.promise().value);
-    }
-
     bool done() const { return handle.done(); }
 
     // Awaiter for co_await support
@@ -114,7 +95,7 @@ public:
         return awaiter{handle};
     }
 
-    handle_type get_handle() { return handle; }
+    handle_type get_handle() const { return handle; }
 
 private:
     handle_type handle;
@@ -127,7 +108,6 @@ public:
     struct promise_type {
         std::exception_ptr exception;
         std::coroutine_handle<> continuation;
-        Scheduler* scheduler = nullptr;
 
         Task get_return_object() {
             return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
@@ -178,21 +158,6 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    void get() {
-        if (!handle.done()) {
-            handle.resume();
-        }
-
-        // Wait for the coroutine to actually complete
-        while (!handle.done()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-
-        if (handle.promise().exception) {
-            std::rethrow_exception(handle.promise().exception);
-        }
-    }
-
     bool done() const { return handle.done(); }
 
     // Awaiter for co_await support
@@ -219,7 +184,7 @@ public:
         return awaiter{handle};
     }
 
-    handle_type get_handle() { return handle; }
+    handle_type get_handle() const { return handle; }
 
 private:
     handle_type handle;

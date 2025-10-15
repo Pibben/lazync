@@ -4,10 +4,13 @@
 
 #ifndef CATCH2TESTEXAMPLE_SCHEDULER_H
 #define CATCH2TESTEXAMPLE_SCHEDULER_H
+
+#include "task.hpp"
+
 #include <condition_variable>
 #include <coroutine>
-#include <mutex>
 #include <queue>
+#include <uv.h>
 
 // Simple Scheduler for managing timed tasks
 class Scheduler {
@@ -21,61 +24,70 @@ public:
         }
     };
 
-    Scheduler() : running(true) {
-        worker = std::thread([this]() { this->run(); });
+    Scheduler() {
+        uv_loop_init(&loop);
     }
 
     ~Scheduler() {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            running = false;
-        }
-        cv.notify_one();
-        if (worker.joinable()) {
-            worker.join();
-        }
+        uv_loop_close(&loop);
     }
 
     void schedule_after(std::coroutine_handle<> coro, std::chrono::milliseconds delay) {
-        auto wake_time = std::chrono::steady_clock::now() + delay;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            tasks.push({wake_time, coro});
-        }
-        cv.notify_one();
+        uv_timer_t timer;
+        uv_timer_init(&loop, &timer);
+        timer.data = coro.address();
+        uv_timer_start(&timer, timer_cb, delay.count(), 0);
     }
 
-    void run() {
-        while (true) {
-            std::unique_lock<std::mutex> lock(mutex);
+    static void timer_cb(uv_timer_t *handle) {
+        std::coroutine_handle<> coro = std::coroutine_handle<>::from_address(handle->data);
+        coro.resume();
+    }
 
-            if (!tasks.empty()) {
-                auto now = std::chrono::steady_clock::now();
-                auto& top = tasks.top();
-
-                if (top.wake_time <= now) {
-                    auto coro = top.coro;
-                    tasks.pop();
-                    lock.unlock();
-                    coro.resume();
-                    continue;
-                }
-
-                // Wait until next task or notification
-                cv.wait_until(lock, top.wake_time);
-            } else {
-                if (!running) break;
-                cv.wait(lock);
+    template <class T>
+    T schedule(const Task<T>& task) {
+        uv_async_t async;
+        uv_async_init(&loop, &async, [](uv_async_t* async) {
+            auto thisHandle = std::coroutine_handle<>::from_address(async->data);
+            if (!thisHandle.done()) {
+                thisHandle.resume();
             }
+            uv_close(reinterpret_cast<uv_handle_t*>(async), nullptr);
+        });
+
+        auto handle = task.get_handle();
+        async.data = handle.address();
+
+        uv_async_send(&async);
+
+        uv_run(&loop, UV_RUN_DEFAULT);
+
+        if (handle.promise().exception) {
+            std::rethrow_exception(handle.promise().exception);
         }
+
+        return std::move(handle.promise().value);
+    }
+
+    void schedule(const Task<void>& task) {
+        uv_async_t async;
+        uv_async_init(&loop, &async, [](uv_async_t* async) {
+            auto thisHandle = std::coroutine_handle<>::from_address(async->data);
+            if (!thisHandle.done()) {
+                thisHandle.resume();
+            }
+            uv_close(reinterpret_cast<uv_handle_t*>(async), nullptr);
+        });
+
+        async.data = task.get_handle().address();
+
+        uv_async_send(&async);
+
+        uv_run(&loop, UV_RUN_DEFAULT);
     }
 
 private:
-    std::priority_queue<TimedTask, std::vector<TimedTask>, std::greater<TimedTask>> tasks;
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::thread worker;
-    std::atomic<bool> running;
+    uv_loop_t loop;
 };
 
 // Global scheduler

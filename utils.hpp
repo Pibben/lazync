@@ -1,5 +1,7 @@
 #include "task.hpp"
 
+#include <atomic>
+
 // when_all for Tasks - stores completion handlers to keep them alive
 template<typename... Tasks>
 class WhenAllAwaitable {
