@@ -33,15 +33,19 @@ public:
     }
 
     void schedule_after(std::coroutine_handle<> coro, std::chrono::milliseconds delay) {
-        uv_timer_t timer;
-        uv_timer_init(&loop, &timer);
-        timer.data = coro.address();
-        uv_timer_start(&timer, timer_cb, delay.count(), 0);
+        auto timer = new uv_timer_t{};
+        uv_timer_init(&loop, timer);
+        timer->data = coro.address();
+        int res = uv_timer_start(timer, timer_cb, delay.count(), 0);
+        assert(res == 0);
     }
 
     static void timer_cb(uv_timer_t *handle) {
         std::coroutine_handle<> coro = std::coroutine_handle<>::from_address(handle->data);
         coro.resume();
+        uv_close(reinterpret_cast<uv_handle_t*>(handle), [](uv_handle_t* h) {
+            delete reinterpret_cast<uv_timer_t*>(h);
+        });
     }
 
     template <class T>

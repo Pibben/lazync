@@ -319,7 +319,7 @@ Task<void> mixed_operations() {
     co_await compute_with_delay();
     co_await sleep_ms(100);
 }
-#if 0
+
 // TRUE PARALLEL EXAMPLE using when_all
 Task<void> truly_parallel_sleeps() {
     co_await when_all(sleep_ms(200), sleep_ms(200));
@@ -333,7 +333,7 @@ Task<int> parallel_compute() {
     co_await when_all(sleep_ms(100), sleep_ms(150));
     co_return 99;
 }
-#endif
+
 TEST_CASE("Scheduler: Sequential sleeps take cumulative time", "[scheduler][sequential]") {
     auto start = std::chrono::steady_clock::now();
 
@@ -375,12 +375,12 @@ TEST_CASE("Scheduler: Compute with delay returns correct value", "[scheduler]") 
     REQUIRE(duration >= 90);
     REQUIRE(duration < 150);
 }
-#if 0
+
 TEST_CASE("Scheduler: when_all runs operations in parallel", "[scheduler][parallel][when_all]") {
     auto start = std::chrono::steady_clock::now();
 
     auto task = truly_parallel_sleeps();
-    task.get();
+    get_scheduler().schedule(task);
 
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -394,7 +394,7 @@ TEST_CASE("Scheduler: when_all with multiple operations", "[scheduler][parallel]
     auto start = std::chrono::steady_clock::now();
 
     auto task = parallel_multiple_sleeps();
-    task.get();
+    get_scheduler().schedule(task);
 
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -408,7 +408,7 @@ TEST_CASE("Scheduler: when_all returns after longest operation", "[scheduler][pa
     auto start = std::chrono::steady_clock::now();
 
     auto task = parallel_compute();
-    int result = task.get();
+    int result = get_scheduler().schedule(task);
 
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -418,7 +418,7 @@ TEST_CASE("Scheduler: when_all returns after longest operation", "[scheduler][pa
     REQUIRE(duration >= 140);
     REQUIRE(duration < 200);
 }
-#endif
+
 TEST_CASE("Scheduler: Comparison of sequential vs parallel", "[scheduler][comparison]") {
 
     SECTION("Sequential execution") {
@@ -436,12 +436,13 @@ TEST_CASE("Scheduler: Comparison of sequential vs parallel", "[scheduler][compar
 
         REQUIRE(duration >= 190);  // ~200ms
     }
-#if 0
+
     SECTION("Parallel execution") {
         auto start = std::chrono::steady_clock::now();
 
         auto task = []() -> Task<void> {
             co_await when_all(sleep_ms(100), sleep_ms(100));
+            //co_await when_all(sleep_ms(100));
         };
 
         get_scheduler().schedule(task());
@@ -451,9 +452,8 @@ TEST_CASE("Scheduler: Comparison of sequential vs parallel", "[scheduler][compar
 
         REQUIRE(duration < 150);  // ~100ms
     }
-#endif
 }
-#if 0
+
 TEST_CASE("Scheduler: Mixed sequential and parallel operations", "[scheduler][mixed]") {
     auto start = std::chrono::steady_clock::now();
 
@@ -467,7 +467,7 @@ TEST_CASE("Scheduler: Mixed sequential and parallel operations", "[scheduler][mi
         // Finally: parallel again
         co_await when_all(sleep_ms(50), sleep_ms(50), sleep_ms(50));
     }();
-    task.get();
+    get_scheduler().schedule(task);
 
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -483,7 +483,7 @@ TEST_CASE("Scheduler: when_all with different durations", "[scheduler][parallel]
     auto task = []() -> Task<void> {
         co_await when_all(sleep_ms(50), sleep_ms(100), sleep_ms(150));
     }();
-    task.get();
+    get_scheduler().schedule(task);
 
     auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -492,4 +492,3 @@ TEST_CASE("Scheduler: when_all with different durations", "[scheduler][parallel]
     REQUIRE(duration >= 140);
     REQUIRE(duration < 200);
 }
-#endif
