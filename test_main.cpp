@@ -492,3 +492,15 @@ TEST_CASE("Scheduler: when_all with different durations", "[scheduler][parallel]
     REQUIRE(duration >= 140);
     REQUIRE(duration < 200);
 }
+
+TEST_CASE("When all return values") {
+    auto task = []() -> Task<std::tuple<int, int>> {
+        auto t = co_await when_all(async_add(5, 10), async_add(2, 11));
+
+        co_return t;
+    }();
+
+    auto t = get_scheduler().schedule(task);
+    REQUIRE(std::get<0>(t) == 15);
+    REQUIRE(std::get<1>(t) == 13);
+}

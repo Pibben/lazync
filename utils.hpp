@@ -14,7 +14,7 @@ struct task_return_type<Task<T>> {
 template<typename T>
 using task_return_type_t = typename task_return_type<T>::type;
 
-// when_all for Tasks - collects return values into a tuple
+// when_all for Tasks - all tasks must return a value (non-void)
 template<typename... Tasks>
 class WhenAllAwaitable {
 public:
@@ -80,7 +80,7 @@ private:
         >::promise_type> task_handle) {
 
         using TaskType = std::remove_reference_t<std::tuple_element_t<I, std::tuple<Tasks...>>>;
-        using ReturnType = task_return_type_t<TaskType>;
+        //using ReturnType = task_return_type_t<TaskType>;
 
         struct Awaiter {
             std::shared_ptr<State> state;
@@ -90,9 +90,7 @@ private:
 
             void await_suspend(std::coroutine_handle<>) {
                 // Extract and store the result from the completed task
-                if constexpr (!std::is_void_v<ReturnType>) {
-                    std::get<I>(state->results) = std::move(task_handle.promise().result);
-                }
+                std::get<I>(state->results) = std::move(task_handle.promise().value);
 
                 // Decrement counter and resume awaiting coroutine if this was the last task
                 size_t remaining = --(state->remaining_count);
@@ -175,7 +173,7 @@ private:
     std::shared_ptr<State> state_;
 };
 
-// when_all factory function
+// when_all factory function - dispatches to appropriate implementation
 template<typename... Tasks>
 auto when_all(Tasks&&... tasks) {
     constexpr bool all_void = (std::is_void_v<task_return_type_t<std::remove_reference_t<Tasks>>> && ...);
